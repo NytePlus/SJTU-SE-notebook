@@ -1,0 +1,86 @@
+name: Build PDFs for Release
+
+on:
+  release:
+    types:
+      - created
+      - published
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload-pdfs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Markdown to PDF dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc texlive-xetex fonts-noto-cjk
+
+      - name: Generate one PDF per top-level folder
+        id: generate
+        shell: bash
+        run: |
+          set -u
+
+          output_dir="$GITHUB_WORKSPACE/release-pdfs"
+          mkdir -p "$output_dir"
+
+          generated_count=0
+          failure_count=0
+
+          for folder_path in "$GITHUB_WORKSPACE"/*/; do
+            folder_name="$(basename "$folder_path")"
+
+            mapfile -t md_files < <(find "$folder_path" -type f -name '*.md' | sort)
+            if [ "${#md_files[@]}" -eq 0 ]; then
+              echo "Skip ${folder_name}: no markdown files found."
+              continue
+            fi
+
+            mapfile -t resource_dirs < <(find "$folder_path" -type d | sort)
+            resource_path="$(IFS=:; echo "${resource_dirs[*]}")"
+
+            output_pdf="${output_dir}/${folder_name}.pdf"
+
+            if pandoc "${md_files[@]}" \
+              --from=gfm \
+              --pdf-engine=xelatex \
+              --resource-path="${resource_path}" \
+              -V mainfont="Noto Serif CJK SC" \
+              -V CJKmainfont="Noto Serif CJK SC" \
+              -V geometry:margin=1in \
+              -o "${output_pdf}"; then
+              echo "Generated ${output_pdf}"
+              generated_count=$((generated_count + 1))
+            else
+              echo "Failed ${folder_name}: markdown to PDF conversion failed."
+              failure_count=$((failure_count + 1))
+            fi
+          done
+
+          if [ "${generated_count}" -eq 0 ]; then
+            echo "No PDFs were generated."
+            exit 1
+          fi
+
+          echo "generated_count=${generated_count}" >> "$GITHUB_OUTPUT"
+
+          if [ "${failure_count}" -gt 0 ]; then
+            echo "Conversion completed with ${failure_count} failure(s)."
+            exit 1
+          fi
+
+      - name: Upload PDFs to current release assets
+        if: always() && steps.generate.outputs.generated_count != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-pdfs/*.pdf
+          fail_on_unmatched_files: true
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
