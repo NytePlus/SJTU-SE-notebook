@@ -49,34 +49,34 @@ jobs:
           \setlist[enumerate]{label=\arabic*.}
           LATEX_HEADER
 
-          find . \
-            -type f \
-            -name '*.md' \
-            ! -path './.git/*' \
-            ! -path './release-pdfs/*' \
-            -print | LC_ALL=C sort > /tmp/markdown-files
-
-          total="$(wc -l < /tmp/markdown-files | tr -d ' ')"
-          if [ "$total" -eq 0 ]; then
-            echo 'No Markdown files found.' >&2
-            exit 1
-          fi
-
           success=0
           failed=0
 
-          while IFS= read -r markdown; do
-            relative="${markdown#./}"
-            stem="${relative%.md}"
-            output="$(printf '%s' "$stem" | sed 's|/|__|g').pdf"
-            markdown_dir="$(dirname "$markdown")"
-            markdown_name="$(basename "$markdown")"
+          for course_dir in ./*/; do
+            find "$course_dir" \
+              -mindepth 1 \
+              -maxdepth 1 \
+              -type f \
+              -name '*.md' \
+              -print | LC_ALL=C sort > /tmp/course-markdown-files
 
-            echo "Building $relative -> release-pdfs/$output"
+            if [ ! -s /tmp/course-markdown-files ]; then
+              continue
+            fi
+
+            course="$(basename "${course_dir%/}")"
+            output="$course.pdf"
+            set --
+            while IFS= read -r markdown; do
+              set -- "$@" "$(basename "$markdown")"
+            done < /tmp/course-markdown-files
+
+            echo "Building $course -> release-pdfs/$output"
+            printf '  %s\n' "$@"
 
             if (
-              cd "$markdown_dir"
-              pandoc "$markdown_name" \
+              cd "$course_dir"
+              pandoc "$@" \
                 --from=gfm \
                 --pdf-engine=xelatex \
                 --resource-path=".:/data" \
@@ -89,12 +89,16 @@ jobs:
             ); then
               success=$((success + 1))
             else
-              echo "::error file=$relative::PDF conversion failed"
+              echo "::error file=$course::PDF conversion failed"
               failed=$((failed + 1))
             fi
-          done < /tmp/markdown-files
+          done
 
-          echo "Generated $success of $total PDFs."
+          echo "Generated $success course PDFs."
+          if [ "$success" -eq 0 ]; then
+            echo 'No course PDFs were generated.' >&2
+            exit 1
+          fi
           if [ "$failed" -ne 0 ]; then
             echo "$failed PDF conversion(s) failed." >&2
             exit 1
