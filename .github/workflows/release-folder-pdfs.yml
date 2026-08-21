@@ -49,8 +49,20 @@ jobs:
           \setlist[enumerate]{label=\arabic*.}
           LATEX_HEADER
 
-          success=0
+          expected=0
           failed=0
+          batch_size=0
+          batch_pids=''
+
+          wait_for_batch() {
+            for job_pid in $batch_pids; do
+              if ! wait "$job_pid"; then
+                failed=$((failed + 1))
+              fi
+            done
+            batch_size=0
+            batch_pids=''
+          }
 
           for course_dir in ./*/; do
             find "$course_dir" \
@@ -74,7 +86,7 @@ jobs:
             echo "Building $course -> release-pdfs/$output"
             printf '  %s\n' "$@"
 
-            if (
+            (
               cd "$course_dir"
               pandoc "$@" \
                 --from=gfm \
@@ -86,20 +98,29 @@ jobs:
                 -V monofont='Noto Sans Mono CJK SC' \
                 -V geometry:margin=1in \
                 -o "/data/release-pdfs/$output"
-            ); then
-              success=$((success + 1))
-            else
+            ) || {
               echo "::error file=$course::PDF conversion failed"
-              failed=$((failed + 1))
+              exit 1
+            } &
+
+            batch_pids="$batch_pids $!"
+            batch_size=$((batch_size + 1))
+            expected=$((expected + 1))
+
+            if [ "$batch_size" -eq 3 ]; then
+              wait_for_batch
             fi
           done
 
-          echo "Generated $success course PDFs."
-          if [ "$success" -eq 0 ]; then
+          wait_for_batch
+
+          generated="$(find /data/release-pdfs -maxdepth 1 -type f -name '*.pdf' | wc -l | tr -d ' ')"
+          echo "Generated $generated of $expected course PDFs."
+          if [ "$expected" -eq 0 ]; then
             echo 'No course PDFs were generated.' >&2
             exit 1
           fi
-          if [ "$failed" -ne 0 ]; then
+          if [ "$failed" -ne 0 ] || [ "$generated" -ne "$expected" ]; then
             echo "$failed PDF conversion(s) failed." >&2
             exit 1
           fi
