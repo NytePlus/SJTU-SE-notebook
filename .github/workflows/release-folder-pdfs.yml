@@ -5,153 +5,108 @@ on:
     types:
       - published
 
+  # 手动调试
+  workflow_dispatch:
+
 permissions:
   contents: write
 
 jobs:
-  discover:
+  build-pdf:
     runs-on: ubuntu-latest
-
-    outputs:
-      matrix: ${{ steps.matrix.outputs.value }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find Markdown files
-        id: matrix
+
+      - name: Prepare directories
+        shell: bash
+        run: |
+          mkdir -p release-pdfs
+
+
+      - name: Generate PDFs with Pandoc
         shell: bash
         run: |
           set -euo pipefail
 
-          matrix="$(
+          generated=0
+          failed=0
+
+          while IFS= read -r -d '' md_file; do
+
+            md_dir="$(dirname "$md_file")"
+
+            filename="$(basename "$md_file" .md)"
+            folder="$(basename "$md_dir")"
+
+            output_name="${folder}-${filename}.pdf"
+
+            # 清理非法文件名字符
+            output_name=$(echo "$output_name" | sed 's/[\/\\:*?"<>|]/_/g')
+
+            output="release-pdfs/$output_name"
+
+            echo "================================"
+            echo "Building:"
+            echo "Input : $md_file"
+            echo "Output: $output"
+            echo "================================"
+
+
+            if docker run --rm \
+              -v "$PWD:/data" \
+              -w /data \
+              pandoc/latex:latest \
+              "$md_file" \
+              --from=gfm \
+              --pdf-engine=xelatex \
+              --resource-path="$md_dir" \
+              -V geometry:margin=1in \
+              -V CJKmainfont="Noto Serif CJK SC" \
+              -V mainfont="Noto Serif CJK SC" \
+              -o "$output"
+            then
+              echo "Success: $output"
+              generated=$((generated+1))
+            else
+              echo "Failed: $md_file"
+              failed=$((failed+1))
+            fi
+
+          done < <(
             find . \
-              -mindepth 2 \
-              -maxdepth 2 \
               -type f \
-              -name '*.md' \
-              -print0 |
-            sort -z |
-            python3 -c '
-          import json
-          import os
-          import sys
+              -name "*.md" \
+              ! -path "./.git/*" \
+              ! -path "./release-pdfs/*" \
+              -print0
+          )
 
-          files = [
-              p.decode()
-              for p in sys.stdin.buffer.read().split(b"\0")
-              if p
-          ]
 
-          items = []
+          echo "Generated PDFs: $generated"
+          echo "Failed PDFs: $failed"
 
-          for path in files:
-              path = path.removeprefix("./")
 
-              folder = os.path.dirname(path)
-              filename = os.path.basename(path)
-              stem = os.path.splitext(filename)[0]
-              folder_name = os.path.basename(folder)
+          if [ "$generated" -eq 0 ]; then
+            echo "::error::No PDFs generated"
+            exit 1
+          fi
 
-              if stem == folder_name:
-                  output = f"{folder_name}.pdf"
-              else:
-                  output = f"{folder_name}-{stem}.pdf"
 
-              items.append({
-                  "folder": folder,
-                  "filename": filename,
-                  "output": output
-              })
+          if [ "$failed" -gt 0 ]; then
+            echo "::error::$failed PDF(s) failed"
+            exit 1
+          fi
 
-          print(json.dumps({"include": items}))
-          '
-          )"
 
-          echo "value=$matrix" >> "$GITHUB_OUTPUT"
 
-  build:
-    needs: discover
-    runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Create output directory
-        run: mkdir -p release-pdfs
-
-      - name: Create LaTeX header
-        shell: bash
-        run: |
-          cat > deep-lists.tex <<'EOF'
-          \usepackage{enumitem}
-
-          \setlistdepth{20}
-
-          \renewlist{itemize}{itemize}{20}
-          \renewlist{enumerate}{enumerate}{20}
-
-          \setlist[itemize]{label=\textbullet}
-
-          \setlist[enumerate,1]{label=\arabic*.}
-          \setlist[enumerate,2]{label=\alph*.}
-          \setlist[enumerate,3]{label=\roman*.}
-          \setlist[enumerate,4]{label=\Alph*.}
-          \setlist[enumerate,5]{label=\Roman*.}
-          \setlist[enumerate,6]{label=\arabic*.}
-          \setlist[enumerate,7]{label=\alph*.}
-          \setlist[enumerate,8]{label=\roman*.}
-          \setlist[enumerate,9]{label=\Alph*.}
-          \setlist[enumerate,10]{label=\Roman*.}
-          \setlist[enumerate,11]{label=\arabic*.}
-          \setlist[enumerate,12]{label=\alph*.}
-          \setlist[enumerate,13]{label=\roman*.}
-          \setlist[enumerate,14]{label=\Alph*.}
-          \setlist[enumerate,15]{label=\Roman*.}
-          \setlist[enumerate,16]{label=\arabic*.}
-          \setlist[enumerate,17]{label=\alph*.}
-          \setlist[enumerate,18]{label=\roman*.}
-          \setlist[enumerate,19]{label=\Alph*.}
-          \setlist[enumerate,20]{label=\Roman*.}
-          EOF
-
-      - name: Convert Markdown to PDF with Pandoc
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          folder="${{ matrix.folder }}"
-          filename="${{ matrix.filename }}"
-          output="${{ matrix.output }}"
-
-          echo "Building:"
-          echo "  Input : $folder/$filename"
-          echo "  Output: release-pdfs/$output"
-
-          docker run --rm \
-            --user "$(id -u):$(id -g)" \
-            -v "$GITHUB_WORKSPACE:/data" \
-            -w "/data/$folder" \
-            pandoc/latex:3.8 \
-            "$filename" \
-            --from=gfm \
-            --pdf-engine=xelatex \
-            --resource-path=. \
-            --include-in-header=/data/deep-lists.tex \
-            -V geometry:margin=1in \
-            -o "/data/release-pdfs/$output"
-
-      - name: Upload PDF to current Release
+      - name: Upload PDFs to Release
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: release-pdfs/${{ matrix.output }}
-          fail_on_unmatched_files: true
+          files: release-pdfs/*.pdf
           overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
