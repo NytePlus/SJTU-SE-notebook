@@ -65,18 +65,25 @@ jobs:
           }
 
           for course_dir in ./*/; do
-            find "$course_dir" \
-              -mindepth 1 \
-              -maxdepth 1 \
-              -type f \
-              -name '*.md' \
-              -print | LC_ALL=C sort > /tmp/course-markdown-files
+            course="$(basename "${course_dir%/}")"
+
+            if [ "$course" = 'WEB' ]; then
+              printf '%s\n' \
+                './WEB/WEB.md' \
+                './WEB/WEB2.md' > /tmp/course-markdown-files
+            else
+              find "$course_dir" \
+                -mindepth 1 \
+                -maxdepth 1 \
+                -type f \
+                -name '*.md' \
+                -print | LC_ALL=C sort > /tmp/course-markdown-files
+            fi
 
             if [ ! -s /tmp/course-markdown-files ]; then
               continue
             fi
 
-            course="$(basename "${course_dir%/}")"
             output="$course.pdf"
             set --
             while IFS= read -r markdown; do
