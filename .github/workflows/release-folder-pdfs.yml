@@ -11,6 +11,7 @@ permissions:
 jobs:
   discover:
     runs-on: ubuntu-latest
+
     outputs:
       matrix: ${{ steps.matrix.outputs.value }}
 
@@ -33,7 +34,9 @@ jobs:
               -print0 |
             sort -z |
             python3 -c '
-          import json, os, sys
+          import json
+          import os
+          import sys
 
           files = [
               p.decode()
@@ -57,7 +60,6 @@ jobs:
                   output = f"{folder_name}-{stem}.pdf"
 
               items.append({
-                  "input": path,
                   "folder": folder,
                   "filename": filename,
                   "output": output
@@ -84,17 +86,68 @@ jobs:
       - name: Create output directory
         run: mkdir -p release-pdfs
 
-      - name: Convert Markdown to PDF with Pandoc
-        uses: docker://pandoc/latex:latest
-        with:
-          args: >-
-            ${{ matrix.input }}
-            --from=gfm
-            --pdf-engine=xelatex
-            -V geometry:margin=1in
-            -o release-pdfs/${{ matrix.output }}
+      - name: Create LaTeX header
+        shell: bash
+        run: |
+          cat > deep-lists.tex <<'EOF'
+          \usepackage{enumitem}
 
-      - name: Upload PDF to Release
+          \setlistdepth{20}
+
+          \renewlist{itemize}{itemize}{20}
+          \renewlist{enumerate}{enumerate}{20}
+
+          \setlist[itemize]{label=\textbullet}
+
+          \setlist[enumerate,1]{label=\arabic*.}
+          \setlist[enumerate,2]{label=\alph*.}
+          \setlist[enumerate,3]{label=\roman*.}
+          \setlist[enumerate,4]{label=\Alph*.}
+          \setlist[enumerate,5]{label=\Roman*.}
+          \setlist[enumerate,6]{label=\arabic*.}
+          \setlist[enumerate,7]{label=\alph*.}
+          \setlist[enumerate,8]{label=\roman*.}
+          \setlist[enumerate,9]{label=\Alph*.}
+          \setlist[enumerate,10]{label=\Roman*.}
+          \setlist[enumerate,11]{label=\arabic*.}
+          \setlist[enumerate,12]{label=\alph*.}
+          \setlist[enumerate,13]{label=\roman*.}
+          \setlist[enumerate,14]{label=\Alph*.}
+          \setlist[enumerate,15]{label=\Roman*.}
+          \setlist[enumerate,16]{label=\arabic*.}
+          \setlist[enumerate,17]{label=\alph*.}
+          \setlist[enumerate,18]{label=\roman*.}
+          \setlist[enumerate,19]{label=\Alph*.}
+          \setlist[enumerate,20]{label=\Roman*.}
+          EOF
+
+      - name: Convert Markdown to PDF with Pandoc
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          folder="${{ matrix.folder }}"
+          filename="${{ matrix.filename }}"
+          output="${{ matrix.output }}"
+
+          echo "Building:"
+          echo "  Input : $folder/$filename"
+          echo "  Output: release-pdfs/$output"
+
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$GITHUB_WORKSPACE:/data" \
+            -w "/data/$folder" \
+            pandoc/latex:3.8 \
+            "$filename" \
+            --from=gfm \
+            --pdf-engine=xelatex \
+            --resource-path=. \
+            --include-in-header=/data/deep-lists.tex \
+            -V geometry:margin=1in \
+            -o "/data/release-pdfs/$output"
+
+      - name: Upload PDF to current Release
         uses: softprops/action-gh-release@v2
         with:
           files: release-pdfs/${{ matrix.output }}
