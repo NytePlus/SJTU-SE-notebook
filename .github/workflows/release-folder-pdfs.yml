@@ -24,8 +24,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             pandoc \
-            fonts-noto-cjk
-    
+            fonts-noto-cjk \
+            fontconfig
+      
+          fc-cache -fv
+      
+          echo "Available CJK fonts:"
+          fc-list :lang=zh | head -20
+      
           pandoc --version
           typst --version
 
