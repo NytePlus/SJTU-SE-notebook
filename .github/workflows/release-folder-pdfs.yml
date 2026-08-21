@@ -9,107 +9,95 @@ permissions:
   contents: write
 
 jobs:
-  build-and-upload-pdfs:
+  discover:
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-    
-      - name: Install Typst
-        uses: typst-community/setup-typst@v4
-    
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pandoc \
-            fonts-noto-cjk \
-            fontconfig
-      
-          fc-cache -fv
-      
-          echo "Available CJK fonts:"
-          fc-list :lang=zh | head -20
-      
-          pandoc --version
-          typst --version
 
-      - name: Generate one PDF per Markdown file
+      - name: Find Markdown files
+        id: matrix
         shell: bash
         run: |
           set -euo pipefail
 
-          output_dir="$GITHUB_WORKSPACE/release-pdfs"
-          mkdir -p "$output_dir"
+          matrix="$(
+            find . \
+              -mindepth 2 \
+              -maxdepth 2 \
+              -type f \
+              -name '*.md' \
+              -print0 |
+            sort -z |
+            python3 -c '
+          import json, os, sys
 
-          generated_count=0
+          files = [
+              p.decode()
+              for p in sys.stdin.buffer.read().split(b"\0")
+              if p
+          ]
 
-          for folder_path in "$GITHUB_WORKSPACE"/*/; do
-            folder_name="$(basename "$folder_path")"
+          items = []
 
-            # Skip generated output directory
-            if [ "$folder_name" = "release-pdfs" ]; then
-              continue
-            fi
+          for path in files:
+              path = path.removeprefix("./")
 
-            # Only process markdown files directly under each folder
-            mapfile -t md_files < <(
-              find "$folder_path" \
-                -maxdepth 1 \
-                -type f \
-                -name '*.md' \
-                | sort
-            )
+              folder = os.path.dirname(path)
+              filename = os.path.basename(path)
+              stem = os.path.splitext(filename)[0]
+              folder_name = os.path.basename(folder)
 
-            if [ "${#md_files[@]}" -eq 0 ]; then
-              echo "Skip ${folder_name}: no markdown files."
-              continue
-            fi
+              if stem == folder_name:
+                  output = f"{folder_name}.pdf"
+              else:
+                  output = f"{folder_name}-{stem}.pdf"
 
-            for md_file in "${md_files[@]}"; do
-              md_dir="$(dirname "$md_file")"
-              md_name="$(basename "$md_file" .md)"
+              items.append({
+                  "input": path,
+                  "folder": folder,
+                  "filename": filename,
+                  "output": output
+              })
 
-              # Avoid name collision
-              if [ "$md_name" = "$folder_name" ]; then
-                output_pdf="$output_dir/${folder_name}.pdf"
-              else
-                output_pdf="$output_dir/${folder_name}-${md_name}.pdf"
-              fi
+          print(json.dumps({"include": items}))
+          '
+          )"
 
-              echo "Building:"
-              echo "  Input : $md_file"
-              echo "  Output: $output_pdf"
+          echo "value=$matrix" >> "$GITHUB_OUTPUT"
 
-              (
-                cd "$md_dir"
+  build:
+    needs: discover
+    runs-on: ubuntu-latest
 
-                pandoc "$(basename "$md_file")" \
-                  --from=gfm \
-                  --pdf-engine=typst \
-                  --resource-path="$md_dir" \
-                  -V mainfont="Noto Serif CJK SC" \
-                  -V sansfont="Noto Sans CJK SC" \
-                  -V monofont="Noto Sans Mono CJK SC" \
-                  -o "$output_pdf"
-              )
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
 
-              generated_count=$((generated_count + 1))
-            done
-          done
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-          if [ "$generated_count" -eq 0 ]; then
-            echo "::error::No PDFs generated."
-            exit 1
-          fi
+      - name: Create output directory
+        run: mkdir -p release-pdfs
 
-          echo "Generated ${generated_count} PDFs."
+      - name: Convert Markdown to PDF with Pandoc
+        uses: docker://pandoc/latex:latest
+        with:
+          args: >-
+            ${{ matrix.input }}
+            --from=gfm
+            --pdf-engine=xelatex
+            -V geometry:margin=1in
+            -o release-pdfs/${{ matrix.output }}
 
-      - name: Upload PDFs to Release
+      - name: Upload PDF to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release-pdfs/*.pdf
+          files: release-pdfs/${{ matrix.output }}
           fail_on_unmatched_files: true
           overwrite_files: true
         env:
