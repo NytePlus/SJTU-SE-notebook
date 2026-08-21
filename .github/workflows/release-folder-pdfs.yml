@@ -89,8 +89,10 @@ jobs:
                   --from=gfm \
                   --pdf-engine=typst \
                   --resource-path="$md_dir" \
+                  -V mainfont="Noto Serif CJK SC" \
+                  -V sansfont="Noto Sans CJK SC" \
+                  -V monofont="Noto Sans Mono CJK SC" \
                   -o "$output_pdf"
-              )
 
               generated_count=$((generated_count + 1))
             done
