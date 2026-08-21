@@ -93,6 +93,7 @@ jobs:
                   -V sansfont="Noto Sans CJK SC" \
                   -V monofont="Noto Sans Mono CJK SC" \
                   -o "$output_pdf"
+              )
 
               generated_count=$((generated_count + 1))
             done
