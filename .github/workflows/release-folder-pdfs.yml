@@ -5,108 +5,118 @@ on:
     types:
       - published
 
-  # 手动调试
   workflow_dispatch:
 
 permissions:
   contents: write
 
+
 jobs:
   build-pdf:
+
     runs-on: ubuntu-latest
 
+
     steps:
-      - name: Checkout repository
+
+      - name: Checkout
         uses: actions/checkout@v4
 
 
-      - name: Prepare directories
-        shell: bash
+      - name: Install fonts on host
         run: |
-          mkdir -p release-pdfs
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk
 
 
-      - name: Generate PDFs with Pandoc
+      - name: Build PDFs
         shell: bash
         run: |
+
           set -euo pipefail
 
-          generated=0
+          mkdir -p release-pdfs
+
           failed=0
+          success=0
 
-          while IFS= read -r -d '' md_file; do
 
-            md_dir="$(dirname "$md_file")"
+          while IFS= read -r -d '' md; do
 
-            filename="$(basename "$md_file" .md)"
-            folder="$(basename "$md_dir")"
 
-            output_name="${folder}-${filename}.pdf"
+            dir=$(dirname "$md")
 
-            # 清理非法文件名字符
-            output_name=$(echo "$output_name" | sed 's/[\/\\:*?"<>|]/_/g')
+            name=$(basename "$md" .md)
 
-            output="release-pdfs/$output_name"
+            folder=$(basename "$dir")
 
-            echo "================================"
-            echo "Building:"
-            echo "Input : $md_file"
+
+            output="release-pdfs/${folder}-${name}.pdf"
+
+
+            echo "=============================="
+            echo "Input : $md"
             echo "Output: $output"
-            echo "================================"
+            echo "=============================="
 
 
             if docker run --rm \
               -v "$PWD:/data" \
+              -v "/usr/share/fonts:/usr/share/fonts:ro" \
+              -v "/etc/fonts:/etc/fonts:ro" \
               -w /data \
               pandoc/latex:latest \
-              "$md_file" \
+              "$md" \
               --from=gfm \
               --pdf-engine=xelatex \
-              --resource-path="$md_dir" \
+              --resource-path="$dir" \
               -V geometry:margin=1in \
               -V CJKmainfont="Noto Serif CJK SC" \
-              -V mainfont="Noto Serif CJK SC" \
               -o "$output"
+
             then
-              echo "Success: $output"
-              generated=$((generated+1))
+
+              success=$((success+1))
+
             else
-              echo "Failed: $md_file"
+
+              echo "FAILED: $md"
               failed=$((failed+1))
+
             fi
+
 
           done < <(
             find . \
-              -type f \
-              -name "*.md" \
-              ! -path "./.git/*" \
-              ! -path "./release-pdfs/*" \
-              -print0
+            -type f \
+            -name "*.md" \
+            ! -path "./.git/*" \
+            ! -path "./release-pdfs/*" \
+            -print0
           )
 
 
-          echo "Generated PDFs: $generated"
-          echo "Failed PDFs: $failed"
+          echo "success=$success"
+          echo "failed=$failed"
 
 
-          if [ "$generated" -eq 0 ]; then
-            echo "::error::No PDFs generated"
+          if [ "$success" -eq 0 ]; then
             exit 1
           fi
 
 
-          if [ "$failed" -gt 0 ]; then
-            echo "::error::$failed PDF(s) failed"
+          if [ "$failed" -ne 0 ]; then
             exit 1
           fi
 
 
 
-      - name: Upload PDFs to Release
+      - name: Upload Release PDFs
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
+
         with:
           files: release-pdfs/*.pdf
-          overwrite_files: true
+
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
