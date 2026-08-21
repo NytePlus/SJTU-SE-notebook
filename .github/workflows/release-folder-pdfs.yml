@@ -19,8 +19,21 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pandoc fonts-noto-cjk
-          google-chrome --version
+          sudo apt-get install -y \
+            pandoc \
+            fonts-noto-cjk
+
+          curl -L \
+            https://github.com/typst/typst/releases/latest/download/typst-x86_64-unknown-linux-musl.tar.gz \
+            -o typst.tar.gz
+
+          tar -xzf typst.tar.gz
+
+          sudo mv typst-x86_64-unknown-linux-musl/typst \
+            /usr/local/bin/typst
+
+          pandoc --version
+          typst --version
 
       - name: Generate one PDF per Markdown file
         shell: bash
@@ -28,74 +41,69 @@ jobs:
           set -euo pipefail
 
           output_dir="$GITHUB_WORKSPACE/release-pdfs"
-          temp_dir="$RUNNER_TEMP/markdown-html"
-
           mkdir -p "$output_dir"
-          mkdir -p "$temp_dir"
 
           generated_count=0
 
           for folder_path in "$GITHUB_WORKSPACE"/*/; do
             folder_name="$(basename "$folder_path")"
 
+            # Skip generated output directory
             if [ "$folder_name" = "release-pdfs" ]; then
               continue
             fi
 
+            # Only process markdown files directly under each folder
             mapfile -t md_files < <(
-              find "$folder_path" -maxdepth 1 -type f -name '*.md' | sort
+              find "$folder_path" \
+                -maxdepth 1 \
+                -type f \
+                -name '*.md' \
+                | sort
             )
 
             if [ "${#md_files[@]}" -eq 0 ]; then
-              echo "Skip ${folder_name}: no Markdown files found."
+              echo "Skip ${folder_name}: no markdown files."
               continue
             fi
 
             for md_file in "${md_files[@]}"; do
+              md_dir="$(dirname "$md_file")"
               md_name="$(basename "$md_file" .md)"
 
-              # 避免不同目录中存在同名 Markdown 时发生覆盖
-              output_pdf="$output_dir/${folder_name}-${md_name}.pdf"
-              temp_html="$temp_dir/${folder_name}-${md_name}.html"
+              # Avoid name collision
+              if [ "$md_name" = "$folder_name" ]; then
+                output_pdf="$output_dir/${folder_name}.pdf"
+              else
+                output_pdf="$output_dir/${folder_name}-${md_name}.pdf"
+              fi
 
               echo "Building:"
-              echo "  ${md_file}"
-              echo "  -> ${output_pdf}"
-
-              md_dir="$(dirname "$md_file")"
+              echo "  Input : $md_file"
+              echo "  Output: $output_pdf"
 
               (
                 cd "$md_dir"
 
                 pandoc "$(basename "$md_file")" \
                   --from=gfm \
-                  --to=html5 \
-                  --standalone \
-                  --embed-resources \
-                  --metadata pagetitle="$md_name" \
-                  -o "$temp_html"
+                  --pdf-engine=typst \
+                  --resource-path="$md_dir" \
+                  -o "$output_pdf"
               )
-
-              google-chrome \
-                --headless \
-                --no-sandbox \
-                --disable-gpu \
-                --print-to-pdf="$output_pdf" \
-                --print-to-pdf-no-header \
-                "file://$temp_html"
 
               generated_count=$((generated_count + 1))
             done
           done
 
           if [ "$generated_count" -eq 0 ]; then
-            echo "::error::No PDFs were generated."
+            echo "::error::No PDFs generated."
             exit 1
           fi
 
-          echo "Generated ${generated_count} PDF(s)."
+          echo "Generated ${generated_count} PDFs."
 
-      - name: Upload PDFs to current release
+      - name: Upload PDFs to Release
         uses: softprops/action-gh-release@v2
         with:
           files: release-pdfs/*.pdf
